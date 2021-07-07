@@ -154,36 +154,36 @@ class AE64:
         imul  di, word ptr [rcx], 0x5970
         push  rdi
         pop   rdx /* 0xc790 */
-        
-        push 0x41
-        pop r8 /* 0x0041 */
         '''
 
         self._lvl2DecoderTemplateAsm = '''
-        /* need encode: 0f 8d af c6 e9 ff */
+        /* need encode: 8d c6 ea ff */
 
-        /* clean rsi */
-        push rsi
-        push rsp
-        pop rcx
-        xor rsi,[rcx]
-        pop rcx
+        /* clean rsi, if full clean */
+        /* push rsi */
+        /* push rsp */
+        /* pop rcx */
+        /* xor rsi, [rcx] */
+        /* pop rcx */
+        
+        /* clean rsi[8:64], base on the context */
+        movsxd rsi, [rcx]
 
         /* get encode start */
-        push 0x41
+        push {}
         push rsp
         pop rcx
-        imul si, word ptr [rcx], 0x4141
-        lea r14, [rax+rsi] /* RECOVER 1 byte (0x11: 0x8d) */
+        imul si, word ptr [rcx], {}
+        lea r14, [rax+rsi+{}] /* RECOVER 1 byte (0x8d) */
 
         /* get encode offset */
-        push 0x42
+        push {}
         push rsp
         pop rcx
-        imul si, word ptr [rcx], 0x4242
-        push rsi
-        pop rcx
-        lea rsi, [r14+rsi*2] /* RECOVER 1 byte (0x20: 0x8d) */
+        imul si, word ptr [rcx], {}
+        lea rcx, [rsi+{}]  /* RECOVER 1 byte (0x8d) */
+        push cx; push 0x41; pop rcx; pop cx /* clean rcx[8:64] */
+        lea rsi, [r14+rcx*2] /* RECOVER 1 byte (0x8d) */
 
         /* push rsi to stack */
         push rsi
@@ -192,21 +192,14 @@ class AE64:
 
         decoder_start:
         /* r14 -> ptr - 0x31 */
-        movsxd rsi, dword ptr [r14+0x32]
-        imul si, word ptr [rcx+r14+0x31] /* RECOVER 2 bytes (0x2c: 0x0f, 0x2d: 0xaf) */
+        imul esi, dword ptr [r14+0x32],0x31
+        xor sil, byte ptr [rcx+r14+0x31] 
         xor byte ptr [r14+0x31], sil
 
-        inc r14 /* RECOVER 2 bytes (0x36: 0xff, 0x37: 0xc6) */
-        cmp [rax],r14
+        inc r14 /* RECOVER 2 bytes (0xff, 0xc6) */
+        cmp [rax], r14
 
-        jne decoder_start /* RECOVER 1 byte (0x3c: 0xe9) */
-        '''
-
-        self._lvl2DecoderPatch = '''
-        push {}
-        push rsp
-        pop rcx
-        imul si, word ptr [rcx], {}
+        jne decoder_start /* RECOVER 1 byte (0xea) */
         '''
 
         # use keystone to assemble snippets
@@ -215,7 +208,9 @@ class AE64:
         self._nop, _ = self._ks.asm(self._nopAsm, as_bytes=True)
         self._nop2, _ = self._ks.asm(self._nop2Asm, as_bytes=True)
         self._initDecoderSmall, _ = self._ks.asm(self._initDecoderSmallAsm, as_bytes=True)
-        self._lvl2DecoderTemplate, _ = self._ks.asm(self._lvl2DecoderTemplateAsm, as_bytes=True)
+        self._lvl2DecoderTemplate, _ = self._ks.asm(self._lvl2DecoderTemplateAsm.format(
+            0x41, 0x4141, 0x41, 0x42, 0x4242, 0x42
+        ), as_bytes=True)
 
     def _gen_prologue(self, register: str) -> bytes:
         ans = b""
@@ -265,7 +260,6 @@ class AE64:
 
     def _gen_encoded_small_lvl2_decoder(self, sc: bytes) -> bytes:
         reg_rdx = [0x90, 0xc7]  # low, high
-        reg_r8 = [0x41, 0]  # low, high
         res = bytearray(sc)
         length = len(sc)
 
@@ -276,10 +270,7 @@ class AE64:
             tmpInfo = EncodeInfoStruct()
             tmpInfo.idx = i
             if sc[i] < 0x80:
-                # only need encode 0xf, we assume in r8
-                tmpInfo.useLowByte = True
-                tmpInfo.reg = 'r8'
-                res[i] ^= reg_r8[0]
+                raise Exception("this should not happen, please contact author")
             else:
                 tmpInfo.reg = 'rdx'
                 for j in range(2):
@@ -429,25 +420,6 @@ class AE64:
                 break
         return
 
-    def _gen_small_level1_decoder(self, offset: int) -> bytes:
-        decoderAsm = ""
-        self._optimize_encoder_info(offset)
-        for infoPlus in self._encodeInfoPlus:
-            if infoPlus.needChangeRdi:
-                if infoPlus.needPushByte:
-                    decoderAsm += "push {};push rsp;pop rcx;".format(infoPlus.gadget.mul.byte)
-                decoderAsm += "imul di, [rcx], {};\n".format(infoPlus.gadget.mul.word)
-            if infoPlus.info.reg != 'rdx' and infoPlus.needChangeRdx:
-                decoderAsm += "push rdx;push {};pop rdx;\n".format(infoPlus.info.reg)
-            if infoPlus.info.useLowByte:
-                decoderAsm += "xor [rax + rdi + {}], dl;\n".format(infoPlus.gadget.offset)
-            else:
-                decoderAsm += "xor [rax + rdi + {}], dh;\n".format(infoPlus.gadget.offset)
-            if infoPlus.info.reg != 'rdx' and infoPlus.needRecoverRdx:
-                decoderAsm += "pop rdx;\n"
-        decoder = self.gen_machine_code(decoderAsm)
-        return decoder
-
     def _gen_small_encoded_shellcode(self, sc: bytes) -> (bytes, int):
         if len(sc) % 2:
             # padding to even length
@@ -466,14 +438,16 @@ class AE64:
                 z3.And(0x61 <= ans[i], ans[i] <= 0x7a),
             ))
         for i in range(scLength):
-            s.add((ans[i + 1] * ans[i + offset]) ^ ans[i] == sc[i])
+            s.add((0x31 * ans[i + 1]) ^ ans[i + offset] ^ ans[i] == sc[i])
         if s.check() == z3.unsat:
             raise Exception("encode unsat")
         m = s.model()
         return bytes([m[ans[i]].as_long() for i in range(targetLength)]), offset
 
-    def _patch_level2_decoder(self, shellcode: bytes, start: int, offset: int) -> bytes:
-        def get_mul_pair(num: int) -> (int, int):
+    def _patch_level2_decoder(self, start: int, offset: int) -> bytes:
+        def get_mul_pair(num: int) -> (int, int, int):
+            print(num)
+
             def z3_isalnum(ch):
                 return z3.Or(
                     z3.And(0x30 <= ch, ch <= 0x39),
@@ -481,30 +455,28 @@ class AE64:
                     z3.And(0x61 <= ch, ch <= 0x7a),
                 )
 
-            v = [z3.BitVec(f'v_{i}', 16) for i in range(2)]
+            v = [z3.BitVec(f'v_{i}', 16) for i in range(3)]
             s = z3.Solver()
             s.add(v[0] & 0xff00 == 0)
-            s.add(v[0] * v[1] == num)
-            s.add(v[0] * v[1] == num)
+            s.add(v[2] & 0xff00 == 0)
+            s.add((v[0] * v[1]) + v[2] == num)
             s.add(z3_isalnum(v[0] & 0xff))
             s.add(z3_isalnum(v[1] & 0xff))
             s.add(z3_isalnum((v[1] & 0xff00) >> 8))
+            s.add(z3_isalnum(v[2] & 0xff))
             if s.check() == z3.unsat:
                 raise Exception("encode unsat")
             m = s.model()
-            return m[v[0]].as_long(), m[v[1]].as_long()
+            return m[v[0]].as_long(), m[v[1]].as_long(), m[v[2]].as_long()
 
-        b1, w1 = get_mul_pair(start - 0x31)
-        b2, w2 = get_mul_pair(offset)
-        shellcode = shellcode.replace(
-            self.gen_machine_code(self._lvl2DecoderPatch.format(0x41, 0x4141)),
-            self.gen_machine_code(self._lvl2DecoderPatch.format(b1, w1)),
-        )
-        shellcode = shellcode.replace(
-            self.gen_machine_code(self._lvl2DecoderPatch.format(0x42, 0x4242)),
-            self.gen_machine_code(self._lvl2DecoderPatch.format(b2, w2)),
-        )
-        return shellcode
+        b1, w1, bb1 = get_mul_pair(start - 0x31)
+        b2, w2, bb2 = get_mul_pair(offset)
+
+        lvl2Decoder, _ = self._ks.asm(self._lvl2DecoderTemplateAsm.format(
+            b1, w1, bb1, b2, w2, bb2
+        ), as_bytes=True)
+        lvl2Decoder = self._gen_encoded_small_lvl2_decoder(lvl2Decoder)
+        return lvl2Decoder
 
     def gen_machine_code(self, asm_code: str) -> bytes:
         """
@@ -589,10 +561,10 @@ class AE64:
                 raise Exception("find non-alphanumeric byte {} in encodedShellcode".format(hex(ch)))
 
         # 3. build level1 decoder
-        totalSpace = prologueLength if prologueLength > 0x20 else 0x20
+        totalSpace = prologueLength if prologueLength > 0x30 else 0x30
         while True:
             print("[*] build decoder, try free space: {} ...".format(totalSpace))
-            decoder = self._gen_small_level1_decoder(offset + totalSpace)
+            decoder = self._gen_decoder(offset + totalSpace)
             decoderLength = len(decoder)
             trueLength = prologueLength + decoderLength
             if totalSpace >= trueLength and totalSpace - trueLength <= 100:
@@ -607,7 +579,7 @@ class AE64:
 
         # 5. patch lvl2 decoder template
         encoder2Start = offset + len(prologue) + len(decoder) + nopLength + len(encodedLvl2DecoderTemplate)
-        encodedLvl2Decoder = self._patch_level2_decoder(encodedLvl2DecoderTemplate, encoder2Start, encoder2Offset)
+        encodedLvl2Decoder = self._patch_level2_decoder(encoder2Start, encoder2Offset)
 
         new_shellcode = prologue + decoder
         new_shellcode += self._nop2 * (nopLength // 2)
