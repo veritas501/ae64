@@ -181,8 +181,8 @@ class AE64:
         push rsp
         pop rcx
         imul si, word ptr [rcx], {}
-        lea rcx, [rsi+{}]  /* RECOVER 1 byte (0x8d) */
-        push cx; push 0x41; pop rcx; pop cx /* clean rcx[8:64] */
+        push rsi
+        pop rcx
         lea rsi, [r14+rcx*2] /* RECOVER 1 byte (0x8d) */
 
         /* push rsi to stack */
@@ -209,7 +209,7 @@ class AE64:
         self._nop2, _ = self._ks.asm(self._nop2Asm, as_bytes=True)
         self._initDecoderSmall, _ = self._ks.asm(self._initDecoderSmallAsm, as_bytes=True)
         self._lvl2DecoderTemplate, _ = self._ks.asm(self._lvl2DecoderTemplateAsm.format(
-            0x41, 0x4141, 0x41, 0x42, 0x4242, 0x42
+            0x41, 0x4141, 0x41, 0x42, 0x4242
         ), as_bytes=True)
 
     def _gen_prologue(self, register: str) -> bytes:
@@ -420,14 +420,8 @@ class AE64:
                 break
         return
 
-    def _gen_small_encoded_shellcode(self, sc: bytes) -> (bytes, int):
-        if len(sc) % 2:
-            # padding to even length
-            sc += b'\x00'
+    def _gen_small_encoded_shellcode(self, sc: bytes, offset: int) -> (bytes, int):
         scLength = len(sc)
-        offset = len(sc) // 2
-        if offset < 4:
-            offset = 4
         targetLength = scLength + offset
         ans = [z3.BitVec('e_{}'.format(i), 8) for i in range(targetLength)]
         s = z3.Solver()
@@ -440,14 +434,12 @@ class AE64:
         for i in range(scLength):
             s.add((0x31 * ans[i + 1]) ^ ans[i + offset] ^ ans[i] == sc[i])
         if s.check() == z3.unsat:
-            raise Exception("encode unsat")
+            raise ValueError("encode unsat")
         m = s.model()
-        return bytes([m[ans[i]].as_long() for i in range(targetLength)]), offset
+        return bytes([m[ans[i]].as_long() for i in range(targetLength)])
 
-    def _patch_level2_decoder(self, start: int, offset: int) -> bytes:
-        def get_mul_pair(num: int) -> (int, int, int):
-            print(num)
-
+    def _patch_level2_decoder(self, start: int, len_sc: int) -> bytes:
+        def get_mul_pair(num: int, no_add: bool = False) -> (int, int, int):
             def z3_isalnum(ch):
                 return z3.Or(
                     z3.And(0x30 <= ch, ch <= 0x39),
@@ -458,25 +450,37 @@ class AE64:
             v = [z3.BitVec(f'v_{i}', 16) for i in range(3)]
             s = z3.Solver()
             s.add(v[0] & 0xff00 == 0)
-            s.add(v[2] & 0xff00 == 0)
             s.add((v[0] * v[1]) + v[2] == num)
             s.add(z3_isalnum(v[0] & 0xff))
             s.add(z3_isalnum(v[1] & 0xff))
             s.add(z3_isalnum((v[1] & 0xff00) >> 8))
-            s.add(z3_isalnum(v[2] & 0xff))
+            if not no_add:
+                s.add(v[2] & 0xff00 == 0)
+                s.add(z3_isalnum(v[2] & 0xff))
+            else:
+                s.add(v[2] == 0)
             if s.check() == z3.unsat:
-                raise Exception("encode unsat")
+                raise ValueError("encode unsat")
             m = s.model()
             return m[v[0]].as_long(), m[v[1]].as_long(), m[v[2]].as_long()
 
         b1, w1, bb1 = get_mul_pair(start - 0x31)
-        b2, w2, bb2 = get_mul_pair(offset)
+        offset = len_sc // 2
+        if offset < 4:
+            offset = 4
+        while True:
+            try:
+                b2, w2, _ = get_mul_pair(offset, True)
+                break
+            except ValueError as ex:
+                offset += 1
+                continue
 
         lvl2Decoder, _ = self._ks.asm(self._lvl2DecoderTemplateAsm.format(
-            b1, w1, bb1, b2, w2, bb2
+            b1, w1, bb1, b2, w2,
         ), as_bytes=True)
         lvl2Decoder = self._gen_encoded_small_lvl2_decoder(lvl2Decoder)
-        return lvl2Decoder
+        return lvl2Decoder, offset
 
     def gen_machine_code(self, asm_code: str) -> bytes:
         """
@@ -573,13 +577,13 @@ class AE64:
                 break
             totalSpace = trueLength
 
-        # 4. build encoded shellcode
-        print("[*] generate encoded shellcode ...".format(totalSpace))
-        encodedShellcode, encoder2Offset = self._gen_small_encoded_shellcode(shellcode)
-
-        # 5. patch lvl2 decoder template
+        # 4. patch lvl2 decoder template
         encoder2Start = offset + len(prologue) + len(decoder) + nopLength + len(encodedLvl2DecoderTemplate)
-        encodedLvl2Decoder = self._patch_level2_decoder(encoder2Start, encoder2Offset)
+        encodedLvl2Decoder, encoder2Offset = self._patch_level2_decoder(encoder2Start, len(shellcode))
+
+        # 5. build encoded shellcode
+        print("[*] generate encoded shellcode ...")
+        encodedShellcode = self._gen_small_encoded_shellcode(shellcode, encoder2Offset)
 
         new_shellcode = prologue + decoder
         new_shellcode += self._nop2 * (nopLength // 2)
