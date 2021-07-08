@@ -72,10 +72,10 @@ Functionality:
 
 |  | ae64 |   [alpha3](https://github.com/SkyLined/alpha3)   |
 | :--- | :------------------------------------------: | :--: |
-| Encode x32 alphanumeric shellcode |  ×   | √ |
-| Encode x64 alphanumeric shellcode | √ | √ |
-| Original shellcode can contain zero bytes | √ | × |
-| Base address register can contain offset | √ | × |
+| Encode x32 alphanumeric shellcode | ❌ | ✔ |
+| Encode x64 alphanumeric shellcode | ✔ | ✔ |
+| Original shellcode can contain zero bytes | ✔ | ❌ |
+| Base address register can contain offset | ✔ | ❌ |
 
 
 
@@ -88,6 +88,15 @@ Length:
 | 192                     | 749        | 401         | 445                                          |
 | 576                     | 2074       | 977         | 1213                                         |
 
+P.S.
+
+length 2 shellcode: "lbl : jmp lbl"
+
+length 48 shellcode: shellcraft.sh()
+
+length 192 shellcode: shellcraft.sh()\*4
+
+length 576 shellcode: shellcraft.sh()\*12
 
 
 ## Old story
