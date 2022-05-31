@@ -447,16 +447,17 @@ class AE64:
                     z3.And(0x61 <= ch, ch <= 0x7a),
                 )
 
-            v = [z3.BitVec(f'v_{i}', 16) for i in range(3)]
+            v = [z3.BitVec(f'v_{i}', 32) for i in range(3)]
             s = z3.Solver()
-            s.add(v[0] & 0xff00 == 0)
-            s.add((v[0] * v[1]) + v[2] == num)
-            s.add(z3_isalnum(v[0] & 0xff))
-            s.add(z3_isalnum(v[1] & 0xff))
-            s.add(z3_isalnum((v[1] & 0xff00) >> 8))
+            s.add(v[0] & 0xFFFFFF00 == 0)
+            s.add(v[1] & 0xFFFF0000 == 0)
+            s.add(v[2] & 0xFFFFFF00 == 0)
+            s.add((((v[0] * v[1]) & 0xFFFF) + v[2])  == num)
+            s.add(z3_isalnum(v[0] & 0xFF))
+            s.add(z3_isalnum(v[1] & 0xFF))
+            s.add(z3_isalnum((v[1] & 0xFF00) >> 8))
             if not no_add:
-                s.add(v[2] & 0xff00 == 0)
-                s.add(z3_isalnum(v[2] & 0xff))
+                s.add(z3_isalnum(v[2] & 0xFF))
             else:
                 s.add(v[2] == 0)
             if s.check() == z3.unsat:
