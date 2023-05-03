@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List
 from copy import deepcopy
 
@@ -21,7 +21,7 @@ class MulCacheStruct:
 
 @dataclass
 class MulGadgetStruct:
-    mul: MulCacheStruct = MulCacheStruct()
+    mul: MulCacheStruct = field(default_factory=MulCacheStruct)
     offset: int = 0
 
 
@@ -34,8 +34,8 @@ class EncodeInfoStruct:
 
 @dataclass
 class EncodeInfoPlusStruct:
-    info: EncodeInfoStruct = EncodeInfoStruct()
-    gadget: MulGadgetStruct = MulGadgetStruct()
+    info: EncodeInfoStruct = field(default_factory=EncodeInfoStruct)
+    gadget: MulGadgetStruct =  field(default_factory=MulGadgetStruct)
     needPushByte: bool = False
     needChangeRdi: bool = False
     needChangeRdx: bool = False
