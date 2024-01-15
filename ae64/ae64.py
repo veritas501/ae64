@@ -314,7 +314,7 @@ class AE64:
 
     def _optimize_encoder_info(self, offset: int):
         def gen_single_info():
-            nonlocal cacheRdi, cacheStackByte, needPushByte
+            nonlocal cacheRdi, cacheStackByte, cacheMulWord, needPushByte
             mulGadget: MulGadgetStruct = MulGadgetStruct()
             target = self._encodeInfo[i].idx + offset
             for offIdx in range(charsetLength):
@@ -345,6 +345,7 @@ class AE64:
                             if ans + charset[offIdx] == target:
                                 cacheRdi = ans
                                 cacheStackByte = mulByte
+                                cacheMulWord = mulWord
                                 needPushByte = True
                                 mulGadget.mul.byte = cacheStackByte
                                 mulGadget.mul.word = mulWord
@@ -362,6 +363,7 @@ class AE64:
 
         cacheRdi = 0
         cacheStackByte = 0
+        cacheMulWord = 0
 
         useRdx: List[EncodeInfoPlusStruct] = []
         useR8: List[EncodeInfoPlusStruct] = []
@@ -398,6 +400,8 @@ class AE64:
                     tmpInfo.needRecoverRdx = False
                     tmpInfo.gadget.offset = self._encodeInfo[i].idx + \
                         offset - cacheRdi
+                    tmpInfo.gadget.mul = MulCacheStruct(
+                        word=cacheMulWord, byte=cacheStackByte)
                     if self._encodeInfo[i].reg == 'rdx':
                         useRdx.append(deepcopy(tmpInfo))
                     elif self._encodeInfo[i].reg == 'r8':
